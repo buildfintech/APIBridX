@@ -333,8 +333,8 @@ def setup_body():
     col2_log = st.container()
     with col2_log:
         if st.button("Refresh") or 1:
-            log_data = load_log_data()
-            df = pd.DataFrame(log_data)
+            # log_data = load_log_data()
+            df = pd.DataFrame(["No data"])
             st.subheader("API call History")
             st.dataframe(df)
 
@@ -359,7 +359,7 @@ def main():
         st.session_state['jwt_keys_store'] = JWTKeyStore.instance()
 
     if 'hostname' not in st.session_state:
-        st.session_state['hostname'] = "apibridx.streamlit.app"
+        st.session_state['hostname'] = platform.uname()[1]
 
     # Add a flag to track if the FastAPI server has been started
     fastapi_thread = find_fastapi_server_thread()
