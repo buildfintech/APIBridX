@@ -200,6 +200,7 @@ class FastAPIProxy:
         try:
             config = uvicorn.Config(self.app, host=self.host, port=8000)
             server = uvicorn.Server(config)
+            print(f"server started {server}")
             server.run()
         except Exception as e:
             SystemError("FastAPI server failed to start")
@@ -358,7 +359,7 @@ def main():
         st.session_state['jwt_keys_store'] = JWTKeyStore.instance()
 
     if 'hostname' not in st.session_state:
-        st.session_state['hostname'] = platform.uname()[1]
+        st.session_state['hostname'] = "apibridx.streamlit.app"
 
     # Add a flag to track if the FastAPI server has been started
     fastapi_thread = find_fastapi_server_thread()
