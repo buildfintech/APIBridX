@@ -358,7 +358,7 @@ def main():
         st.session_state['jwt_keys_store'] = JWTKeyStore.instance()
 
     if 'hostname' not in st.session_state:
-        st.session_state['hostname'] = platform.uname()[1]
+        st.session_state['hostname'] = "apibridx.streamlit.app"
 
     # Add a flag to track if the FastAPI server has been started
     fastapi_thread = find_fastapi_server_thread()
