@@ -252,6 +252,7 @@ def on_button_remove_selected_click():
 def setupsidebar_registration(fproxy, session_id):
     with st.sidebar:
         # FastAPIProxy running status
+        
         proxy_status = "Running" if find_fastapi_server_thread()  else "Stopped"
         color = ":green" if proxy_status == "Running" else ":red"
         st.write(f"Status: {color}[{proxy_status}]")
@@ -351,7 +352,7 @@ def main():
     
     st.set_page_config(layout="wide", page_title="BreifKey")
     st.markdown(f'<h1 style="color:blue; text-align: center;">BreifKey: Making OpenAI API Use Easier and Safer</h1>', unsafe_allow_html=True)
-
+    st.sidebar.subheader(f"Demo App - :red[Not for Prod]")
     if 'session_id' not in st.session_state:
         st.session_state['session_id'] = generate_session_id()
 
