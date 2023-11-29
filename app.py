@@ -251,11 +251,11 @@ def on_button_remove_selected_click():
 
 def setupsidebar_registration(fproxy, session_id):
     with st.sidebar:
-        st.write(f"Session ID: :blue[{session_id}]")
         # FastAPIProxy running status
         proxy_status = "Running" if find_fastapi_server_thread()  else "Stopped"
         color = ":green" if proxy_status == "Running" else ":red"
-        st.write(f"Proxy: {color}[{proxy_status}]")
+        st.write(f"Status: {color}[{proxy_status}]")
+        st.write(f"Session ID: :blue[{session_id}]")
         
         st.title("Register Keys")
 
