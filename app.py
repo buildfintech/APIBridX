@@ -348,8 +348,8 @@ def getFastAPIProxy_instance():
 
 def main():
     
-    st.set_page_config(layout="wide", page_title="APIBridX")
-    st.markdown(f'<h1 style="color:blue; text-align: center;">APIBridX Token Generator - Demo</h1>', unsafe_allow_html=True)
+    st.set_page_config(layout="wide", page_title="BreifKey")
+    st.markdown(f'<h1 style="color:blue; text-align: center;">BreifKey: Making OpenAI API Use Easier and Safer</h1>', unsafe_allow_html=True)
 
     if 'session_id' not in st.session_state:
         st.session_state['session_id'] = generate_session_id()
