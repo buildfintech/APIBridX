@@ -251,7 +251,6 @@ def on_button_remove_selected_click():
 
 def setupsidebar_registration(fproxy, session_id):
     with st.sidebar:
-        st.write(f":red[Not for Production use]")
         st.write(f"Session ID: :blue[{session_id}]")
         # FastAPIProxy running status
         proxy_status = "Running" if find_fastapi_server_thread()  else "Stopped"
@@ -365,8 +364,11 @@ def main():
 
     # Add a flag to track if the FastAPI server has been started
     fastapi_thread = find_fastapi_server_thread()
+    fproxy = getFastAPIProxy_instance()
     if 'fastapi_proxy' not in st.session_state:
-        st.session_state['fastapi_proxy'] = getFastAPIProxy_instance()
+        st.session_state['fastapi_proxy'] = fproxy
+        
+    st.sidebar.write(f"Proxy : {fproxy.config_host}:{fproxy.config_port}")
 
     if not fastapi_thread:
         st.session_state['fastapi_thread'] = threading.Thread(target=run_fastapi_proxy, args=(getFastAPIProxy_instance(),), daemon=True, name=unique_thread_name)
