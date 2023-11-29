@@ -96,19 +96,20 @@ class FastAPIProxy:
         return cls._instance
 
     @classmethod
-    def instance(cls, host, jwtkeystore_ref):
+    def instance(cls):
         inst = cls.__new__(cls)
         if not inst.initialized:
-            inst.__init__(host, jwtkeystore_ref)
+            inst.__init__()
             inst.initialized = True
         return inst
 
-    def __init__(self, host, jwtkeystore_ref: JWTKeyStore):
+    def __init__(self):
         if not self.initialized:
-            self.host = host
             self.app = FastAPI()
             self.logs = {}
-            self.jwt_key_store_ref = jwtkeystore_ref
+            self.config = uvicorn.Config(self.app)
+            self.config_host = self.config.host
+            self.config_port = self.config.port
             self.setup_routes()
 
     def setup_routes(self):
@@ -129,7 +130,7 @@ class FastAPIProxy:
         async def proxy_request(request: Request):
             session_id   = request.headers.get('Session_Id')
 
-            if not self.jwt_key_store_ref.is_valid_session(session_id):
+            if not JWTKeyStore.instance().is_valid_session(session_id):
                 raise HTTPException(status_code=401, detail= "Missing Session ID")
             
             
@@ -159,7 +160,7 @@ class FastAPIProxy:
 
             try:
                 # Decode JWT token using JWTKeyStore instance
-                decoded_token = self.jwt_key_store_ref.decode_jwt(token)
+                decoded_token = JWTKeyStore.instance().decode_jwt(token)
                 # Retrieve OpenAI API key for the given token
                 api_key = self.jwt_key_store_ref.get_service_key(session_id, service_name,token)
                 if not api_key:
@@ -198,18 +199,19 @@ class FastAPIProxy:
             
     def run(self):
         try:
-            config = uvicorn.Config(self.app, host=self.host, port=8000)
-            server = uvicorn.Server(config)
-            print(f"server started {server}")
+            # config = uvicorn.Config(self.app, host=self.host, port=8000)
+            
+            server = uvicorn.Server(self.config)
             server.run()
         except Exception as e:
             SystemError("FastAPI server failed to start")
 
 def load_log_data():
     # URL of the FastAPI logs endpoint
-    hostname = st.session_state['hostname']
+    hostname = FastAPIProxy.instance().config_host
+    port = FastAPIProxy.instance().config_port
     session_id = st.session_state['session_id']
-    url = "http://{host}:{port}/logs".format(host=hostname, port=8000)
+    url = "http://{host}:{port}/logs".format(host=hostname, port=port)
     response = requests.get(url,  params={'session_id': session_id})
     if response.status_code == 200:
         return response.json()
@@ -333,8 +335,8 @@ def setup_body():
     col2_log = st.container()
     with col2_log:
         if st.button("Refresh") or 1:
-            # log_data = load_log_data()
-            df = pd.DataFrame(["No data"])
+            log_data = load_log_data()
+            df = pd.DataFrame(log_data)
             st.subheader("API call History")
             st.dataframe(df)
 
@@ -344,7 +346,7 @@ def run_fastapi_proxy(fproxy):
 
 @st.cache_resource
 def getFastAPIProxy_instance():
-    return FastAPIProxy.instance(st.session_state['hostname'],st.session_state['jwt_keys_store'] )
+    return FastAPIProxy.instance()
 
 def main():
     
