@@ -11,11 +11,24 @@ import platform
 import threading
 import random
 import string
+import multiprocessing
+import traceback
+from multiprocessing import Queue
+import io
+import sys
+import contextlib
+import io
+import sys
+import contextlib
+import multiprocessing
+import traceback
+import json
+import ast
 
 def _maskAPIKey(key):
     return '*' * (4) + key[-4:] if len(key)> 4 else '*'
 
-unique_thread_name = "_fastapri_proxy_thread_88765"
+unique_thread_name = "_fastapi_proxy_thread_88765"
 
 # Function to generate a unique session ID
 def generate_session_id():
@@ -27,7 +40,6 @@ def find_fastapi_server_thread(name=unique_thread_name):
             return thread
     return None
 
-
 class JWTKeyStore:
     _instance = None
     _lock = threading.Lock()
@@ -35,54 +47,37 @@ class JWTKeyStore:
     def __new__(cls, *args, **kwargs):
         with cls._lock:
             if cls._instance is None:
-                cls._instance = super(JWTKeyStore, cls).__new__(cls)
-                # Now jwt_keys is a dict of dicts, with the top-level key being the session ID
+                cls._instance = super().__new__(cls)
                 cls._instance.jwt_keys = {}
                 cls._instance.JWT_SECRET = '_Thentral_NAM8Bker#V*)'
                 cls._instance.JWT_ALGORITHM = 'HS256'
         return cls._instance
 
-    @classmethod
-    def instance(cls):
-        if cls._instance is None:
-            cls.__new__(cls)
-        return cls._instance
-    
-    # Client side call
     def create_jwt_token(self, session_id, service_name, openai_key, hours_valid=24):
         expiry_time = datetime.datetime.utcnow() + datetime.timedelta(hours=hours_valid)
-        payload = {
-            "service_name": service_name,
-            "exp": expiry_time
-        }
+        payload = {"service_name": service_name, "exp": expiry_time}
         token = jwt.encode(payload, self.JWT_SECRET, algorithm=self.JWT_ALGORITHM)
 
         with self._lock:
             if session_id not in self.jwt_keys:
-                self.jwt_keys[session_id] = {}  # Initialize a new dict for the session if it doesn't exist
+                self.jwt_keys[session_id] = {}
             self.jwt_keys[session_id][(service_name, token)] = openai_key
-
         return token, expiry_time
-    
-    # Server side call
+
     def get_service_key(self, session_id, service_name, token):
         with self._lock:
-            # Retrieve the inner dict using the session_id and then the openai_key using the service_name and token
             return self.jwt_keys.get(session_id, {}).get((service_name, token))
-        
-    # Server side call
+
     def is_valid_session(self, session_id):
         with self._lock:
-            # check key exist
             return session_id in self.jwt_keys
 
-
-    # Server side call    
     def decode_jwt(self, token):
         with self._lock:
             return jwt.decode(token, self.JWT_SECRET, algorithms=[self.JWT_ALGORITHM])
 
-        
+
+
 
 class FastAPIProxy:
     _instance = None
@@ -92,7 +87,7 @@ class FastAPIProxy:
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
-                cls._instance.initialized = False  # Indicates if instance is initialized
+                cls._instance.initialized = False
         return cls._instance
 
     @classmethod
@@ -107,6 +102,7 @@ class FastAPIProxy:
         if not self.initialized:
             self.app = FastAPI()
             self.logs = {}
+            self.jwt_key_store_ref = JWTKeyStore()
             self.config = uvicorn.Config(self.app)
             self.config_host = self.config.host
             self.config_port = self.config.port
@@ -130,7 +126,7 @@ class FastAPIProxy:
         async def proxy_request(request: Request):
             session_id   = request.headers.get('Session_Id')
 
-            if not JWTKeyStore.instance().is_valid_session(session_id):
+            if not self.jwt_key_store_ref.is_valid_session(session_id):
                 raise HTTPException(status_code=401, detail= "Missing Session ID")
             
             
@@ -160,7 +156,7 @@ class FastAPIProxy:
 
             try:
                 # Decode JWT token using JWTKeyStore instance
-                decoded_token = JWTKeyStore.instance().decode_jwt(token)
+                decoded_token = self.jwt_key_store_ref.decode_jwt(token)
                 # Retrieve OpenAI API key for the given token
                 api_key = self.jwt_key_store_ref.get_service_key(session_id, service_name,token)
                 if not api_key:
@@ -218,47 +214,96 @@ def load_log_data():
     else:
         return ["No Activites found"]
 
-def show_code():
-    code = '''
-    #1. Form a request
-    request_data = {
-        "original_url": "https://api.openai.com/v1/chat/completions",
-        "original_body": {
-            "model": "gpt-3.5-turbo-1106",  # Specify the model
-            "messages": [{"role": "user", "content": "Hi, This is a test"}]
-        }
-    }
-    #2. API call routed via Proxy server
-    response = requests.post(
-        "http://proxy_server:8000/proxy",
-        headers={
-            "Authorization": f"{token}", "Service-Name": service_name, 
-            "Session_Id": session_id, },
-        json=request_data 
-    )
+# Define the function to run user code at the module level
+def run_user_code(user_code, output_queue, error_queue):
+    try:
+        # Redirect standard output
+        with contextlib.redirect_stdout(io.StringIO()) as output_buffer:
+            exec(user_code)
+
+        # Get the output and put it in the output queue
+        output = output_buffer.getvalue()
+        output_queue.put(output)
+    except Exception:
+        # Capture the exception and put it in the error queue
+        error_info = traceback.format_exc()
+        error_queue.put(error_info)
+
+
+def execute_code_in_process(user_code):
+    output_queue = multiprocessing.Queue()
+    error_queue = multiprocessing.Queue()
+    process = multiprocessing.Process(target=run_user_code, args=(user_code, output_queue, error_queue))
+    process.start()
+    return process, output_queue, error_queue
+
+
+def show_code(sessionid, token, proxy_url, msg):
+    code_template = '''
+#1. Form a request
+request_data = {{
+    "original_url": "https://api.openai.com/v1/chat/completions",
+    "original_body": {{
+        "model": "gpt-3.5-turbo-1106",  # Specify the model
+        "messages": [{{"role": "user", "content": "{msg}"}}]
+    }}
+}}
+#2. API call routed via Proxy server
+response = requests.post(
+    "{proxy_url}/proxy",
+    headers={{
+        "Authorization": "{token}",
+        "Service-Name": "openai",
+        "Session_Id": "{sessionid}"
+    }},
+    json=request_data 
+)
+print(json.loads(response.text))
     '''
-    st.code(code, language='python')    
+
+    formatted_code = code_template.format(token=token, sessionid=sessionid, proxy_url=proxy_url, msg=msg)
+    st.code(formatted_code, language='python')
+
+
+    execute_status = all([token==""])
+    if st.button('Execute', disabled= execute_status):
+        execute_btn_clicked = True
+        with st.spinner("Accessing OpenAI Through the Inbuilt Proxy Service"):
+            st.session_state['execution_status'] = False
+            process, output_queue, error_queue = execute_code_in_process(formatted_code)
+            process.join()  # Wait for the process to finish
+            
+        # Check for errors first
+        if not error_queue.empty():
+            error = error_queue.get()
+            st.error(f"Error in user code: {error}")
+            st.session_state["out_put"] =error
+        # Check for standard output
+        elif not output_queue.empty():
+            output = output_queue.get().strip()
+            st.session_state["execution_status"] = True
+            st.session_state["out_put"] =output
+        
+        return execute_btn_clicked
 
 def show_image():
-    st.image('TokenFlow.jpg')
+    st.image('TokenFlow.jpg', use_column_width=True)
 
 def on_button_register_click():
     st.session_state['btn_action_register'] = True
 
-def on_button_remove_selected_click():
-    st.session_state['btn_action_remove_selected'] = True
 
-
-def setupsidebar_registration(fproxy, session_id):
+def setupsidebar_registration(proxy_url):
     with st.sidebar:
         # FastAPIProxy running status
-        
-        proxy_status = "Running" if find_fastapi_server_thread()  else "Stopped"
-        color = ":green" if proxy_status == "Running" else ":red"
-        st.write(f"Status: {color}[{proxy_status}]")
-        st.write(f"Session ID: :blue[{session_id}]")
-        
-        st.title("Register Keys")
+        with st.expander("Proxy Server"):
+            proxy_status = "Running" if find_fastapi_server_thread()  else "Stopped"
+            color = ":green" if proxy_status == "Running" else ":red"
+            st.write(f"Status: {color}[{proxy_status}]")
+            st.write(f"Session ID: :blue[{st.session_state['session_id']}]")
+            st.write(f"Proxy : {proxy_url}")
+
+        st.title("1.Generate Token")
 
         # Service Name Selection - Single Select
         service_name_reg = st.selectbox("Select API Key *", ["openai"], key="service_reg")
@@ -274,7 +319,7 @@ def setupsidebar_registration(fproxy, session_id):
         gen_button = st.button("Register", key="register_session", on_click=on_button_register_click, disabled=not all_fields_provided)
 
     if st.session_state.get('btn_action_register', False) and all_fields_provided:
-        new_token, expiry_time = st.session_state['jwt_keys_store'].create_jwt_token( st.session_state['session_id'],
+        new_token, expiry_time = st.session_state['jwt_key_store'].create_jwt_token( st.session_state['session_id'],
             service_name_reg, openai_key, hours_valid=expiry_hours_reg)
         
         # Store the new token in the session state
@@ -284,7 +329,7 @@ def setupsidebar_registration(fproxy, session_id):
             "Status": "Active",
         }
 
-        st.success("API Key registered successfully!")
+        st.sidebar.success("API Key registered successfully!")
         # Reset the flag to False once the operation is done
         st.session_state['btn_action_register'] = False
 
@@ -293,10 +338,10 @@ def create_history_dataframe():
     data = []
     # Iterate over the jwt_keys dictionary
     session_id = st.session_state['session_id'] 
-    for (service_name, token), value in st.session_state['jwt_keys_store'].jwt_keys.get(session_id, {}).items():
+    for (service_name, token), value in st.session_state['jwt_key_store'].jwt_keys.get(session_id, {}).items():
         # Construct a dictionary for each entry
         entry = {
-            'Session Id' : session_id,
+            'SessionId' : session_id,
             'Service': service_name,
             'Token': token
         }
@@ -309,36 +354,83 @@ def create_history_dataframe():
     return pd.DataFrame(data)
 
 
-def setup_body():
+def setup_body(proxy_url):
 # Main Body of the application - Top section
+
     col1_hist = st.container()
     with col1_hist:
-        st.button("Revoke Tokens", key="Remove_Selected_Sessions", on_click=on_button_remove_selected_click)
+        st.subheader("2. Tokens")
+        
         df = create_history_dataframe()
         # Check if DataFrame is not empty
         if not df.empty:
             # Add a checkbox column to the DataFrame for selection
+            df['Select'] = False
             df['Remove'] = False
+            # Reorder DataFrame columns to place 'Select' and 'Remove' first
+            column_order = ['Select', 'Remove'] + [col for col in df.columns if col not in ['Select', 'Remove']]
+            reordered_df = df[column_order]
             # Make the DataFrame editable with checkboxes for selection
             edited_df = st.data_editor(
-                df,
+                reordered_df,
                 column_config={
-                    'Remove': st.column_config.CheckboxColumn(label='Remove')
-                }
+                'Select': st.column_config.CheckboxColumn (label='Select', help ="select the token to be used"),
+                'Remove': st.column_config.CheckboxColumn(label='Remove')
+                },
+                use_container_width=True
             )
-            if st.session_state.get('btn_action_remove_selected', False):
-                st.session_state['btn_action_remove_selected'] = False            
-                keys_to_remove = [(row['Service'], row['Token']) for index, row in edited_df.iterrows() if row['Remove']]
-                st.session_state['jwt_keys_store'].jwt_keys = {key: value for key, value in st.session_state['jwt_keys_store'].jwt_keys.items() if key not in keys_to_remove}
-                st.rerun()
+
+            selected_rows = edited_df[edited_df['Select'] == True]
+            if not selected_rows.empty:
+                selected_token = selected_rows.iloc[0]['Token']
+                st.session_state['selected_token'] = selected_token
+            else: st.session_state['selected_token'] = ""    
+
+
+            if st.button("Revoke Tokens", key="Remove_Selected_Sessions"):
+                deleted= False
+                for index, row in edited_df.iterrows():
+                    if row['Remove']:
+                        sessionId = row['SessionId']
+                        service   = row['Service']
+                        token     =  row['Token']
+                        if (service, token) in st.session_state['jwt_key_store'].jwt_keys[sessionId]:
+                            del st.session_state['jwt_key_store'].jwt_keys[sessionId][(service, token)]
+                            deleted = True
+                if deleted:
+                    st.rerun()
+
+
+
+    st.markdown("---")  # Separator
+
+    code1 = st.container()
+    exc_btn_clicked = False
+    with code1 :    
+        st.subheader("3. Playground: :green[Simulate API Calls] ")
+        msg = st.text_input("Input your Question", "Say, This is an API test completed using Token")
+        exc_btn_clicked = show_code(sessionid=st.session_state['session_id'],token=st.session_state["selected_token"], proxy_url=proxy_url, msg=msg)
+        if st.session_state['execution_status']:
+            output_dict = ast.literal_eval(st.session_state['out_put'])
+            st.json(output_dict)
+        else: st.write(f":red[{st.session_state['out_put']}]")
+
+    st.markdown("---")  # Separator
 
     col2_log = st.container()
     with col2_log:
-        if st.button("Refresh") or 1:
+        st.subheader("4. API call History")
+        if exc_btn_clicked:
             log_data = load_log_data()
             df = pd.DataFrame(log_data)
-            st.subheader("API call History")
-            st.dataframe(df)
+            st.dataframe(df, use_container_width=True)
+
+    st.markdown("---")  # Separator
+
+    st.subheader("5. Reference Architecture")
+    with st.expander("Flow Diagram"):
+        show_image()
+    
 
 def run_fastapi_proxy(fproxy):
     fproxy.run()
@@ -348,18 +440,42 @@ def run_fastapi_proxy(fproxy):
 def getFastAPIProxy_instance():
     return FastAPIProxy.instance()
 
+def how_to_use():
+    # 'How To' Section
+    with st.expander("How to Section"):
+        st.markdown("""
+        **A Demo Application - Do Not Use in Production**
+        
+        Follow these steps to interact with the application:
+
+        1. **Generate a Token:** 
+        Go to the sidebar and enter your OpenAI API key in the "OpenAI API Key *" input field to generate a token.
+
+        2. **Tokens:** 
+        From Tokens list, select the token you want to use by clicking the corresponding checkbox.
+
+        3. **Execute Sample Code:** 
+        Navigate to the "Playground" section. The sample code will automatically include your selected token. Click "Execute" to see the response from OpenAI. This sample code is designed to mimic a 3rd party app.
+
+        4. **Reference Architecture:** 
+        For additional information, refer to the "Reference Architecture" at the bottom of the page. This Streamlit application is embedded with a FastAPI proxy and runs on the same server as the Streamlit app.
+        """)
+
+
 def main():
     
     st.set_page_config(layout="wide", page_title="BreifKey")
-    st.markdown(f'<h1 style="color:blue; text-align: center;">BreifKey: Making OpenAI API Use Easier and Safer</h1>', unsafe_allow_html=True)
-    st.sidebar.subheader(f"Demo App - :red[Not for Prod]")
+    st.markdown(f'<h1 style="color:green; text-align: center;">BreifKey: Making OpenAI API Use Easier and Safer</h1>', unsafe_allow_html=True)
+    how_to_use()
     if 'session_id' not in st.session_state:
         st.session_state['session_id'] = generate_session_id()
+        st.session_state["selected_token"] = ""
+
+    if 'out_put' not in  st.session_state:
+         st.session_state['execution_status'] = False
+         st.session_state["out_put"] = "No results show"
 
    
-    if 'jwt_keys_store' not in st.session_state:
-        st.session_state['jwt_keys_store'] = JWTKeyStore.instance()
-
     if 'hostname' not in st.session_state:
         st.session_state['hostname'] = platform.uname()[1]
 
@@ -368,24 +484,18 @@ def main():
     fproxy = getFastAPIProxy_instance()
     if 'fastapi_proxy' not in st.session_state:
         st.session_state['fastapi_proxy'] = fproxy
-        
-    st.sidebar.write(f"Proxy : {fproxy.config_host}:{fproxy.config_port}")
 
+    if 'jwt_key_store' not in st.session_state:
+        st.session_state['jwt_key_store'] = fproxy.jwt_key_store_ref
+        
+    proxy_url = f"http://{fproxy.config_host}:{fproxy.config_port}"        
+    
     if not fastapi_thread:
         st.session_state['fastapi_thread'] = threading.Thread(target=run_fastapi_proxy, args=(getFastAPIProxy_instance(),), daemon=True, name=unique_thread_name)
         st.session_state['fastapi_thread'].start()
         
-
-    setupsidebar_registration(st.session_state['fastapi_proxy'], st.session_state['session_id'])
-    st.subheader("Registered API Keys")
-    setup_body()
-    image1, code2 = st.columns(2)
-    with image1:
-        st.subheader("Flow Diagram")
-        show_image()
-    with code2 :    
-        st.subheader("Sample code")
-        show_code()
+    setupsidebar_registration(proxy_url=proxy_url)
+    setup_body(proxy_url=proxy_url)
 
 if __name__ == "__main__":
     main()
