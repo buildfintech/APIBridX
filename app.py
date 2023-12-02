@@ -210,9 +210,9 @@ def load_log_data():
     url = "http://{host}:{port}/logs".format(host=hostname, port=port)
     response = requests.get(url,  params={'session_id': session_id})
     if response.status_code == 200:
+        st.session_state['history_data_loaded'] = True
         return response.json()
-    else:
-        return ["No Activites found"]
+    
 
 # Define the function to run user code at the module level
 def run_user_code(user_code, output_queue, error_queue):
@@ -264,34 +264,17 @@ print(json.loads(response.text))
     formatted_code = code_template.format(token=token, sessionid=sessionid, proxy_url=proxy_url, msg=msg)
     st.code(formatted_code, language='python')
 
+    return formatted_code
 
-    execute_status = all([token==""])
-    if st.button('Execute', disabled= execute_status):
-        execute_btn_clicked = True
-        with st.spinner("Accessing OpenAI Through the Inbuilt Proxy Service"):
-            st.session_state['execution_status'] = False
-            process, output_queue, error_queue = execute_code_in_process(formatted_code)
-            process.join()  # Wait for the process to finish
-            
-        # Check for errors first
-        if not error_queue.empty():
-            error = error_queue.get()
-            st.error(f"Error in user code: {error}")
-            st.session_state["out_put"] =error
-        # Check for standard output
-        elif not output_queue.empty():
-            output = output_queue.get().strip()
-            st.session_state["execution_status"] = True
-            st.session_state["out_put"] =output
-        
-        return execute_btn_clicked
-
+    
 def show_image():
     st.image('TokenFlow.jpg', use_column_width=True)
 
 def on_button_register_click():
     st.session_state['btn_action_register'] = True
 
+def on_button_revoke_click():
+    st.session_state['btn_action_revoke'] = True
 
 def setupsidebar_registration(proxy_url):
     with st.sidebar:
@@ -353,14 +336,17 @@ def create_history_dataframe():
 
     return pd.DataFrame(data)
 
+def msg_hit_enter():
+    st.session_state['msg_hit_enter'] = True
+    
 
 def setup_body(proxy_url):
 # Main Body of the application - Top section
 
     col1_hist = st.container()
     with col1_hist:
-        st.subheader("2. Tokens")
-        
+        st.subheader("2. Tokens", help="Use sidebar to generate tokens")
+        st.button("Revoke Tokens", key="Remove_Selected_Sessions", on_click=on_button_revoke_click)
         df = create_history_dataframe()
         # Check if DataFrame is not empty
         if not df.empty:
@@ -387,7 +373,8 @@ def setup_body(proxy_url):
             else: st.session_state['selected_token'] = ""    
 
 
-            if st.button("Revoke Tokens", key="Remove_Selected_Sessions"):
+            if st.session_state.get('btn_action_revoke', False):
+                st.session_state['btn_action_revoke'] = False
                 deleted= False
                 for index, row in edited_df.iterrows():
                     if row['Remove']:
@@ -401,26 +388,43 @@ def setup_body(proxy_url):
                     st.rerun()
 
 
-
     st.markdown("---")  # Separator
 
     code1 = st.container()
     exc_btn_clicked = False
     with code1 :    
-        st.subheader("3. Playground: :green[Simulate API Calls] ")
-        msg = st.text_input("Input your Question", "Say, This is an API test completed using Token")
-        exc_btn_clicked = show_code(sessionid=st.session_state['session_id'],token=st.session_state["selected_token"], proxy_url=proxy_url, msg=msg)
-        if st.session_state['execution_status']:
-            output_dict = ast.literal_eval(st.session_state['out_put'])
-            st.json(output_dict)
-        else: st.write(f":red[{st.session_state['out_put']}]")
+        st.subheader("3. Playground: :green[ Simulate API Calls]", help="Input your question, click Execute")
+        msg = st.text_input("Input your Question", "Say, This is an API test completed using Token", key="input_msg", on_change=msg_hit_enter)
+        formatted_code = show_code(sessionid=st.session_state['session_id'],token=st.session_state["selected_token"], proxy_url=proxy_url, msg=msg)
+        if st.session_state.input_msg and st.session_state['msg_hit_enter'] :
+            exc_btn_clicked = True
+            if st.session_state["selected_token"]=="":
+             st.error("Please select a token to be used")
+            else :
+                with st.spinner("Accessing OpenAI Through the Inbuilt Proxy Service"):
+                    process, output_queue, error_queue = execute_code_in_process(formatted_code)
+                    process.join()  # Wait for the process to finish
+                    
+                # Check for errors first
+                if not error_queue.empty():
+                    error = error_queue.get()
+                    st.error(f"Error in user code: {error}")
+                    st.session_state["out_put"] =error
+                    st.write(f":red[{st.session_state['out_put']}]")
+                # Check for standard output
+                elif not output_queue.empty():
+                    output = output_queue.get().strip()
+                    st.session_state["out_put"] =output
+                    output_dict = ast.literal_eval(st.session_state['out_put'])
+                    st.json(output_dict)    
+
 
     st.markdown("---")  # Separator
 
     col2_log = st.container()
     with col2_log:
-        st.subheader("4. API call History")
-        if exc_btn_clicked:
+        st.subheader("4. API call History", help="shows call activities")
+        if exc_btn_clicked or st.session_state['history_data_loaded']:
             log_data = load_log_data()
             df = pd.DataFrame(log_data)
             st.dataframe(df, use_container_width=True)
@@ -445,20 +449,20 @@ def how_to_use():
     with st.expander("How to Section"):
         st.markdown("""
         **A Demo Application - Do Not Use in Production**
-        
-        Follow these steps to interact with the application:
+
+        Follow these simple steps to interact with the application:
 
         1. **Generate a Token:** 
-        Go to the sidebar and enter your OpenAI API key in the "OpenAI API Key *" input field to generate a token.
+        In the sidebar, enter your OpenAI API key in the "OpenAI API Key *" input field. This action will generate a token for you.
 
-        2. **Tokens:** 
-        From Tokens list, select the token you want to use by clicking the corresponding checkbox.
+        2. **Select a Token:** 
+        Choose the desired token from the list of Tokens by clicking on the corresponding checkbox.
 
-        3. **Execute Sample Code:** 
-        Navigate to the "Playground" section. The sample code will automatically include your selected token. Click "Execute" to see the response from OpenAI. This sample code is designed to mimic a 3rd party app.
+        3. **Query OpenAI:** 
+        Head over to the "Playground" section. Here, type in your query for OpenAI and simply hit the 'Enter' key to execute. Ensure you have selected a token before submitting your query. This feature mimics the functionality of a third-party application.
 
         4. **Reference Architecture:** 
-        For additional information, refer to the "Reference Architecture" at the bottom of the page. This Streamlit application is embedded with a FastAPI proxy and runs on the same server as the Streamlit app.
+        Curious about the underlying structure? Scroll down to the "Reference Architecture" at the bottom of the page for more insights. This Streamlit application integrates a FastAPI proxy and operates on the same server as the Streamlit app itself.
         """)
 
 
@@ -471,8 +475,15 @@ def main():
         st.session_state['session_id'] = generate_session_id()
         st.session_state["selected_token"] = ""
 
+    if 'msg_hit_enter' not in  st.session_state:
+        st.session_state['msg_hit_enter'] = False
+
+    if 'history_data_loaded' not in  st.session_state:
+        st.session_state['history_data_loaded'] = False
+
+
     if 'out_put' not in  st.session_state:
-         st.session_state['execution_status'] = False
+         st.session_state[''] = False
          st.session_state["out_put"] = "No results show"
 
    
